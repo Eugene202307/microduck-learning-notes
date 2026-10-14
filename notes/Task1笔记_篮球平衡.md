@@ -6,7 +6,7 @@
 ① 问题：让鸭子站在自由滚动的篮球上，按速度指令边走边保持平衡 → ② 00 的 walking 模型不可迁移（它假设脚下固定平面，动作节奏会把自由球越推越偏；且球滚动与身体姿态间有隐藏时序关系，单帧前馈判断不了）→ ③ 方案：**换场景不换接口**（沿用 61 维观测约定/14 关节/50 Hz/动作缩放）、**换 LSTM blind actor**（球状态不进观测，靠本体感觉+隐状态推断球的运动）、**PPO + privileged critic 重训** → ④ 执行：复现公开 checkpoint b11（模型契约检查 → ONNX 导出与 parity → GPU 闭环 → 多环境评测）→ ⑤ 结论：链路本地走通 → ⑥ 边界：**这是公开模型的本地复核，不是自训成果；仿真通过 ≠ 真机可用**。
 
 ## 2. 观测、动作与 LSTM
-- 61 维观测与 00 完全一致：0:3 陀螺 / 3:6 重力投影 / 6:20 关节位置 / 20:34 关节速度 / 34:48 上一 步动作 / 48:51 速度指令 / 51:61 零填充；动作 14 维；
+- 61 维观测与 00 完全一致：0:3 陀螺 / 3:6 重力投影 / 6:20 关节位置 / 20:34 关节速度 / 34:48 上一步动作 / 48:51 速度指令 / 51:61 零填充；动作 14 维；
 - 网络：LSTM(256) → ELU MLP(512→256→128) → 14 维动作；
 - ONNX 契约：`obs[1,61] + h_in[1,1,256] + c_in[1,1,256] → actions[1,14] + h_out + c_out`，50 Hz，每步把 h_out/c_out 传回下一步。
 
@@ -39,7 +39,7 @@
 
 ## 6. 实践记录
 - **已执行（云端 GPU，2026-10-14）**：模型契约检查（§1/§4）、GPU 闭环（§5）、ONNX parity 校验，结果见上表；
-- **训练 smoke（§3）**：由 `MICRODUCK_RUN_BASKETBALL_SMOKE=1` 门控，此前未启用；2026-10-15 补跑两次未成功，排查轨迹：① 当前云端实例未挂载模型包（"找不到官方 b11 checkpoint"）→ 按 README §6.1 补下 checkpoint 至 `/root/autodl-tmp/models/microduck-basketball/checkpoint.pt`；② 训练启动即报 `ModuleNotFoundError: mjlab_microduck.basketball_distillation`——原因是 Notebook 调用官方仓库脚本，而当前 Python 环境属于 microduck-playground-stilts 仓库，两者包不配套。修复路径：在官方 checkout 内 `uv sync --locked`（README §6.1）建专属环境后重跑。smoke 目标是验证"采样→更新→保存→导出"链路（64 环境×5 轮，LR 2e-5），非实际训练；此项列为后续练习，当前 GPU 闭环与 parity 结果不受影响；
+- **训练 smoke（§3，2026-10-15 补跑成功）**：按 README §6.2/§6.3 在官方 checkout 内执行完整训练链路：从 b11（6999 迭代）恢复，64 环境 × 5 次 PPO 更新（LR 2e-5，`--push-interval-s 1.5 3`），产出 `logs/rsl_rl/basketball/2026-10-14_19-59-23_basketball-resume-smoke/model_7003.pt`；导出 `outputs/smoke.onnx` 并通过 parity：40 步（reset_at=20）max abs err 1.67e-06，与 README 参考值 1.43e-06 同量级。"采样→更新→保存→导出→一致性检查"全链路验证通过。排查轨迹（学习记录）：首次补跑①当前实例未挂载模型包（"找不到官方 b11 checkpoint"）→ 按 §6.1 补下 checkpoint；②Notebook 调官方脚本而 Python 环境属 stilts 仓库（`ModuleNotFoundError: mjlab_microduck.basketball_distillation`）→ 在官方 checkout 内 `uv sync --locked` 建专属环境后，改用 README 命令行直跑成功（含 `--checkpoint-file=路径` 需用等号形式的细节）；
 - **未执行**：BPU 板端闭环（默认门控关闭，链路后半段学习目标）；多 seed 评测（本次为默认随机性下的单次抽样，98.83% 为官方复核口径）。
 
 ## 7. 遗留与后续
